@@ -20,7 +20,6 @@ typedef struct EthernetHeader
 	u8	MACReceiver[MAC_ADDRESS_SIZE];
 	u8	MACSender[MAC_ADDRESS_SIZE];
 	u16	nProtocolType;
-#define ETH_PROT_ARP		0x806
 }
 PACKED EthernetHeader;
 typedef struct IPV4Header
@@ -97,6 +96,14 @@ static const u8 OwnIPAddress[] = OWN_IP_ADDRESS;
 
 static const char FromSample[] = "sample";
 
+
+int switch_msb_lsb(int number){
+	int switched = (number%(16*16)*(16*16))+ (number /(16*16));
+
+	return switched;
+}
+
+
 void set_ethernet_header(EthernetHeader *header, u8 mac_address_reciver[])
 {
 	u8 OwnMACAddress[MAC_ADDRESS_SIZE];
@@ -107,6 +114,7 @@ void set_ethernet_header(EthernetHeader *header, u8 mac_address_reciver[])
     memcpy (header->MACSender, OwnMACAddress, MAC_ADDRESS_SIZE);
     header->nProtocolType = EthernetProtocol;
 }
+
 
 void set_ip_header(IPV4Header *IPV4, u8 ip[IP_ADDRESS_SIZE], int size){
 
@@ -123,15 +131,12 @@ void set_ip_header(IPV4Header *IPV4, u8 ip[IP_ADDRESS_SIZE], int size){
 	memcpy (IPV4->IPReceiver, ip, IP_ADDRESS_SIZE);
 }
 
-int switch_msb_lsb(int number){
-    int switched = (number%(16*16)*(16*16))+ (number /(16*16));
 
-    return switched;
-}
 
 void send_udp_to(u8 ip[IP_ADDRESS_SIZE],char *data, int data_size, int port){
 
 	int udp_size = data_size + 8; // 8 byte for udp header
+	int package_size = udp_size; //EhternetHeader size and IPV4 Header size are added later
 
 	u8 Buffer[USPI_FRAME_BUFFER_SIZE];
 	UDPFrame *pack = (UDPFrame *) Buffer;
@@ -141,6 +146,8 @@ void send_udp_to(u8 ip[IP_ADDRESS_SIZE],char *data, int data_size, int port){
 	set_ethernet_header(&pack->Ethernet, MAC_BROADCAST);
 	set_ip_header(&pack->IPV4, ip, udp_size);
 
+	package_size += sizeof (pack->Ethernet) + sizeof (pack->IPV4);
+
 	pack->UDP.PortSender 	= switch_msb_lsb(port);
 	pack->UDP.PortReceiver	= switch_msb_lsb(port);
 	pack->UDP.Length		= switch_msb_lsb(udp_size);
@@ -149,13 +156,14 @@ void send_udp_to(u8 ip[IP_ADDRESS_SIZE],char *data, int data_size, int port){
 	memcpy (pack->data, data, data_size);
 
 
-	if (!USPiSendFrame (pack, sizeof *pack))
+	if (!USPiSendFrame (pack, package_size))
 	{
 		LogWrite (FromSample, LOG_ERROR, "USPiSendFrame failed");
 
 		return;
 	}
 }
+
 
 int main (void)
 {
@@ -184,7 +192,8 @@ int main (void)
 	u8 MAC_BROADCAST[] 	= {255, 255, 255, 255, 255, 255};
 	u8 IP_BROADCAST[] 	= {192, 168, 178, 255};
 	u8 IP_NTP[] 		= {192, 168, 178, 1};
-	u8 RECIVER_IP_ADDRESS[]  = {192, 168, 178, 36};
+	u8 RECIVER_IP_ADDRESS_PHILIPP[]  = {192, 168, 178, 60};
+	u8 RECIVER_IP_ADDRESS_WOLLE[]  = {192, 168, 178, 36};
 	u16 EthernetProtocol = 0x0008;
 	//u8 OWN_IP_ADDRESS = {192, 168, 178, 251};	
 
@@ -201,7 +210,7 @@ int main (void)
 
 
 
-		/*
+		
 		
 		//Request zusammenstellen
 		//Ethernet-Header
@@ -252,11 +261,13 @@ int main (void)
 
 		LogWrite (FromSample, LOG_NOTICE, "ARP reply successfully sent");
 
-		 */
 
-		char * message = "Hello Philipp";
 
-        send_udp_to(RECIVER_IP_ADDRESS, message, UDP_MAX_DATA_SIZE, 3030);
+		char * message_p = "Hello Philipp";
+		char * message_w = "Hello Wolle!"
+
+        send_udp_to(RECIVER_IP_ADDRESS_PHILIPP, message_p, 15, 3030);
+		send_udp_to(RECIVER_IP_ADDRESS_WOLLE, message_w, 12, 3030);
 
 		for(i=0; i<pause;i++)
 		{
