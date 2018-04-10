@@ -130,7 +130,7 @@ static const char FromSample[] = "sample";
 void send_debug_message(char * message, int size){
     u8 test_ip[] = {192,168,178,60};
 
-    send_udp_to(test_ip, message, size, 3031);
+    //send_udp_to(test_ip, message, size, 3031);
 }
 
 int switch_msb_lsb(int number){
