@@ -8,12 +8,13 @@
 #include <uspienv/macros.h>
 #include <uspienv/types.h>
 
-#define	OWN_IP_ADDRESS		{192, 168, 178, 240}	// must be a valid IP address on your LAN
+#define	OWN_IP_ADDRESS		{192, 168, 178, 241}	// must be a valid IP address on your LAN
 
 #define MAC_ADDRESS_SIZE	6
 #define IP_ADDRESS_SIZE		4
 
 #define UDP_MAX_DATA_SIZE 1400
+#define ETHERNET_MAX_SIZE 1542
 
 typedef struct EthernetHeader
 {
@@ -22,6 +23,32 @@ typedef struct EthernetHeader
 	u16	nProtocolType;
 }
 PACKED EthernetHeader;
+
+typedef struct TARPPacket
+{
+	u16		nHWAddressSpace;
+#define HW_ADDR_ETHER		1
+	u16		nProtocolAddressSpace;
+#define PROT_ADDR_IP		0x800
+	u8		nHWAddressLength;
+	u8		nProtocolAddressLength;
+	u16		nOPCode;
+#define ARP_REQUEST		1
+#define ARP_REPLY		2
+	u8		HWAddressSender[MAC_ADDRESS_SIZE];
+	u8		ProtocolAddressSender[IP_ADDRESS_SIZE];
+	u8		HWAddressTarget[MAC_ADDRESS_SIZE];
+	u8		ProtocolAddressTarget[IP_ADDRESS_SIZE];
+}
+PACKED TARPPacket;
+
+typedef struct TARPFrame
+{
+    EthernetHeader Ethernet;
+	TARPPacket	ARP;
+}
+PACKED TARPFrame;
+
 typedef struct IPV4Header
 {
 	u8	VersIHL;
@@ -92,6 +119,9 @@ typedef struct SNTPFrame
 }
 PACKED SNTPFrame;
 
+void replay_arp(TARPFrame *pARPFrame);
+void send_udp_to(u8 ip[IP_ADDRESS_SIZE],char *data, int data_size, int port);
+
 static const u8 OwnIPAddress[] = OWN_IP_ADDRESS;
 
 static const char FromSample[] = "sample";
@@ -109,7 +139,7 @@ u16 addU16(u16 *check, u16 anzByte, u16 data)
 	{
 		sum = sum + (check[i]&0xff00);
 	}
-	sum = (sum&0xffff) +(sum>>16); 
+	sum = (sum&0xffff) +(sum>>16);
 	return (sum & 0xffff);
 }
 void checksumIPV4(IPV4Header *IPV4)
@@ -129,8 +159,15 @@ void checksumUDP(UDPFrame * UDP, int anzDataByte)
 	tmp = addU16(&UDP->UDP,8,tmp);
 	//add Data
 	tmp = addU16(&UDP->data,anzDataByte,tmp);
-	//komplement	
+	//komplement
 	UDP->UDP.Checksum = tmp^0xffff;
+
+}
+
+void send_debug_message(char * message, int size){
+    u8 test_ip[] = {192,168,178,60};
+
+    //send_udp_to(test_ip, message, size, 3031);
 }
 
 int switch_msb_lsb(int number){
@@ -139,6 +176,151 @@ int switch_msb_lsb(int number){
 	return switched;
 }
 
+u8 *ip_table[256]; // size for netmask 255.255.255.0
+
+void init_arp(){
+
+	int pos;
+	for(pos = 0; pos < sizeof * ip_table;pos++) {
+		ip_table[pos] = 0;
+	}
+
+	u8 OwnMACAddress[MAC_ADDRESS_SIZE];
+	USPiGetMACAddress (OwnMACAddress);
+
+	int own_ip[IP_ADDRESS_SIZE] = OWN_IP_ADDRESS;
+
+	ip_table[own_ip[IP_ADDRESS_SIZE-1]] = OwnMACAddress;
+
+}
+
+int get_mac_address_of(u8 ip[IP_ADDRESS_SIZE], u8 * mac){
+
+	if(ip_table[ip[IP_ADDRESS_SIZE-1]] != 0){
+
+		mac = ip_table[ip[IP_ADDRESS_SIZE-1]];
+		return 0;
+	}else{
+
+		//send_arp_to(ip);
+		return -1;
+	}
+
+}
+
+void set_mac_address_of(u8 ip[IP_ADDRESS_SIZE], u8 mac[MAC_ADDRESS_SIZE]){
+	ip_table[ip[IP_ADDRESS_SIZE-1]] = &mac[0];
+}
+
+
+
+void send_arp_to(u8 ip[IP_ADDRESS_SIZE]){
+
+    u8 OwnMACAddress[MAC_ADDRESS_SIZE];
+    USPiGetMACAddress (OwnMACAddress);
+
+	u8 MAC_BROADCAST[] 	= {255, 255, 255, 255, 255, 255};
+
+	u8 Buffer[USPI_FRAME_BUFFER_SIZE];
+	TARPFrame *pARPFrame = (TARPFrame *) Buffer;
+
+	memcpy (pARPFrame->Ethernet.MACReceiver, MAC_BROADCAST, MAC_ADDRESS_SIZE);
+	memcpy (pARPFrame->Ethernet.MACSender, OwnMACAddress, MAC_ADDRESS_SIZE);
+	pARPFrame->Ethernet.nProtocolType = switch_msb_lsb(0x806);
+
+	pARPFrame->ARP.nHWAddressSpace = switch_msb_lsb(HW_ADDR_ETHER);
+	pARPFrame->ARP.nProtocolAddressSpace = switch_msb_lsb(PROT_ADDR_IP);
+
+	pARPFrame->ARP.nHWAddressLength = 6;
+	pARPFrame->ARP.nProtocolAddressLength = 4;
+
+	pARPFrame->ARP.nOPCode = switch_msb_lsb(ARP_REQUEST);
+
+	memcpy (pARPFrame->ARP.HWAddressSender, OwnMACAddress, MAC_ADDRESS_SIZE);
+	memcpy (pARPFrame->ARP.ProtocolAddressSender, OwnIPAddress, IP_ADDRESS_SIZE);
+
+	memcpy (pARPFrame->ARP.HWAddressTarget, MAC_BROADCAST, MAC_ADDRESS_SIZE);
+	memcpy (pARPFrame->ARP.ProtocolAddressTarget, ip, IP_ADDRESS_SIZE);
+
+	if (!USPiSendFrame (pARPFrame, sizeof * pARPFrame))
+	{
+		LogWrite (FromSample, LOG_ERROR, "USPiSendFrame failed");
+
+		return;
+	}
+}
+
+void gratuitous_arp(){
+    u8 own_ip[IP_ADDRESS_SIZE] = OWN_IP_ADDRESS;
+	send_arp_to(own_ip);
+}
+
+void analyse_arp(TARPFrame * pARPFrame, u8* mac, u8* ip, u16 *operation){
+	memcpy (mac, pARPFrame->ARP.HWAddressSender, MAC_ADDRESS_SIZE);
+	memcpy (ip, pARPFrame->ARP.ProtocolAddressSender, IP_ADDRESS_SIZE);
+	*operation = pARPFrame->ARP.nOPCode;
+}
+
+void analyse_ipv4(UDPFrame * frame, u8 * mac, u8 * ip ){
+	memcpy (mac, frame->Ethernet.MACSender, MAC_ADDRESS_SIZE);
+	memcpy (ip, frame->IPV4.IPSender, IP_ADDRESS_SIZE);
+}
+
+int analyse_uspi_receive_frame(u8 Buffer[USPI_FRAME_BUFFER_SIZE], unsigned nFrameLength){
+
+
+	if(nFrameLength < ETHERNET_MAX_SIZE){
+	    EthernetHeader *header = (EthernetHeader *) Buffer;
+		//memcpy(header, Buffer, sizeof * header);
+		if(header->nProtocolType == switch_msb_lsb(0x806) && nFrameLength >= sizeof(TARPFrame)){
+			TARPFrame *frame = (TARPFrame *) Buffer;
+			u8 mac[MAC_ADDRESS_SIZE];
+			u8 ip[IP_ADDRESS_SIZE];
+			u16 operation = 0;
+		    analyse_arp(frame, mac, ip, &operation);
+		    if(operation == switch_msb_lsb(ARP_REQUEST)){
+		        send_debug_message("received arp request", 24);
+
+		        replay_arp(frame);
+		    }else if(operation == switch_msb_lsb(ARP_REPLY)){
+		        send_debug_message("received arp replay", 22);
+		    }
+		}else if(header->nProtocolType == switch_msb_lsb(0x800) && nFrameLength < sizeof(UDPFrame)){
+            send_udp_to(test_ip, "received udp", 15, 3030);
+
+		}else{
+		    return -1;
+		}
+	}else{
+	    return -1;
+	}
+
+	return 0;
+}
+
+void replay_arp(TARPFrame *pARPFrame){
+
+    u8 OwnMACAddress[MAC_ADDRESS_SIZE];
+    USPiGetMACAddress (OwnMACAddress);
+
+	// prepare reply packet
+	memcpy (pARPFrame->Ethernet.MACReceiver, pARPFrame->ARP.HWAddressSender, MAC_ADDRESS_SIZE);
+	memcpy (pARPFrame->Ethernet.MACSender, OwnMACAddress, MAC_ADDRESS_SIZE);
+	pARPFrame->ARP.nOPCode = BE (ARP_REPLY);
+
+	memcpy (pARPFrame->ARP.HWAddressTarget, pARPFrame->ARP.HWAddressSender, MAC_ADDRESS_SIZE);
+	memcpy (pARPFrame->ARP.ProtocolAddressTarget, pARPFrame->ARP.ProtocolAddressSender, IP_ADDRESS_SIZE);
+
+	memcpy (pARPFrame->ARP.HWAddressSender, OwnMACAddress, MAC_ADDRESS_SIZE);
+	memcpy (pARPFrame->ARP.ProtocolAddressSender, OwnIPAddress, IP_ADDRESS_SIZE);
+
+	if (!USPiSendFrame (pARPFrame, sizeof *pARPFrame))
+	{
+		LogWrite (FromSample, LOG_ERROR, "USPiSendFrame failed");
+
+		return;
+	}
+}
 
 void set_ethernet_header(EthernetHeader *header, u8 mac_address_reciver[])
 {
@@ -156,11 +338,11 @@ void set_ip_header(IPV4Header *IPV4, u8 ip[IP_ADDRESS_SIZE], int size){
 
 	//IPV4-Header
 	IPV4->VersIHL 	= 0x45; //Vers=4, IHL = 5x32Bit
-	IPV4->TOS 	= 0x0;
+	IPV4->TOS 		= 0x0;
 	IPV4->Length	= switch_msb_lsb(20 + size); //20 Byte Header + size
-	IPV4->ID	= 0x01;
+	IPV4->ID		= 0x01;
 	IPV4->FlagFragmentOffset = 0x0040; //Keine Fragmente
-	IPV4->TTL	= 0x20;
+	IPV4->TTL		= 0x20;
 	IPV4->Protocol	= 0x11; //17->UDP-Code
 	IPV4->HeaderChecksum	= 0x0;
 	memcpy (IPV4->IPSender, OwnIPAddress, IP_ADDRESS_SIZE);
@@ -182,7 +364,7 @@ void send_udp_to(u8 ip[IP_ADDRESS_SIZE],char *data, int data_size, int port){
 	u8 MAC_Laptop[]		= {184, 136, 227, 51, 106, 91};
 	u8 MAC_Router[]		= {56, 16, 213, 19, 202, 42};
 
-	set_ethernet_header(&pack->Ethernet, MAC_Router);
+	set_ethernet_header(&pack->Ethernet, MAC_BROADCAST);
 	set_ip_header(&pack->IPV4, ip, udp_size);
 
 	package_size += sizeof (pack->Ethernet) + sizeof (pack->IPV4);
@@ -190,10 +372,10 @@ void send_udp_to(u8 ip[IP_ADDRESS_SIZE],char *data, int data_size, int port){
 	pack->UDP.PortSender 	= switch_msb_lsb(port);
 	pack->UDP.PortReceiver	= switch_msb_lsb(port);
 	pack->UDP.Length		= switch_msb_lsb(udp_size);
-	pack->UDP.Checksum	= 0x0;//0x4B2E;
+	pack->UDP.Checksum	= 0x0;
 
 	memcpy (pack->data, data, data_size);
-	
+
 	checksumUDP(pack, data_size);
 	//pack->UDP.Checksum	=  checksum((u16 *) &pack->UDP, 4+data_size/2);
 
@@ -232,6 +414,8 @@ int main (void)
 	}
 	u8 MAC_BROADCAST[] 	= {255, 255, 255, 255, 255, 255};
 	u8 IP_BROADCAST[] 	= {192, 168, 178, 255};
+	u8 RECIVER_IP_ADDRESS_PC[] = {192, 168, 178, 60};
+	u8 RECIVER_IP_ADDRESS_ROUTER[] = {192, 168, 178, 1};
 	u8 IP_Router[] 		= {192, 168, 178, 1}; //Router
 	u8 MAC_Router[]		= {56, 16, 213, 19, 202, 42};
 	u8 IP_Laptop[] 		= {192, 168, 178, 60}; // Laptop
@@ -250,18 +434,34 @@ int main (void)
 	u8 BufferReceive[USPI_FRAME_BUFFER_SIZE];
 	SNTPFrame *pSNTPFrameReceive = (SNTPFrame *) BufferReceive;
 	unsigned nFrameLength;	
-	
+
 	u8 BufferSNTP[USPI_FRAME_BUFFER_SIZE];
 	SNTPHeader *SNTP = (SNTPHeader *) BufferSNTP;
 
 	u8 OwnMACAddress[MAC_ADDRESS_SIZE];
 	USPiGetMACAddress (OwnMACAddress);
-	char * message;	
+	char * message;
 
 	u32 pause = 200000000;
+	u32 pause_loop = 0;
 	u32 i = 0;	
 	while (1)
 	{
+
+        u8 Buffer[USPI_FRAME_BUFFER_SIZE];
+		unsigned nFrameLength;
+	    if (USPiReceiveFrame (Buffer, &nFrameLength))
+		{
+			analyse_uspi_receive_frame(Buffer, nFrameLength);
+		}
+
+		if(pause_loop < pause){
+	        pause_loop++;
+	        continue;
+	    }else{
+	        pause_loop = 0;
+	    }
+
 		// SNTP
 		SNTP->li_vn_mode	= 0xE3;
 		SNTP->stratum	= 0x0;
@@ -284,23 +484,12 @@ int main (void)
 		message = "Request gesendet";
 		send_udp_to(IP_Laptop, message, 16, 3030);
 
-		for(i=0; i<20; i++)
-		{
-			if (!USPiReceiveFrame (Buffer, &nFrameLength))
-			{
-				message = "keine Antwort";
-				send_udp_to(IP_Laptop, message, 14, 3030);
-				continue;
-			}
-			message = "Antwort erhalten";
-			send_udp_to(IP_Laptop, message, 16, 3030);
-			send_udp_to(IP_Laptop, Buffer, 76, 3030);
-		}
 
-		for(i=0; i<pause;i++)
-		{
-			memcpy (pSNTPFrame->Ethernet.MACReceiver, MAC_BROADCAST, MAC_ADDRESS_SIZE);
-		}
+        gratuitous_arp();
+		send_arp_to(RECIVER_IP_ADDRESS_ROUTER);
+		send_arp_to(RECIVER_IP_ADDRESS_PC);
+
+
 	}
 
 	USPiEnvClose ();
