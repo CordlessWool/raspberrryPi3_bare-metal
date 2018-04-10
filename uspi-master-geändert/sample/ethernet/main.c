@@ -121,6 +121,7 @@ PACKED SNTPFrame;
 
 void replay_arp(TARPFrame *pARPFrame);
 void send_udp_to(u8 ip[IP_ADDRESS_SIZE],char *data, int data_size, int port);
+int receiveEthernetFrame();
 
 static const u8 OwnIPAddress[] = OWN_IP_ADDRESS;
 
@@ -202,8 +203,22 @@ int get_mac_address_of(u8 ip[IP_ADDRESS_SIZE], u8 * mac){
 		return 0;
 	}else{
 
-		//send_arp_to(ip);
-		return -1;
+		send_arp_to(ip);
+		int loops = 20000;
+		int loop_counter = 0;
+		while(receiveEthernetFrame() == -1 || loop_counter < loops){
+		    loop_counter++;
+		}
+
+		if(loop_counter == loops){
+		    u8 MAC_BROADCAST[MAC_ADDRESS_SIZE] = {255, 255, 255, 255, 255, 255};
+		    mac = MAC_BROADCAST;
+		    return -1;
+		}else{
+		    mac = ip_table[ip[IP_ADDRESS_SIZE-1]];
+		    return 0;
+		}
+
 	}
 
 }
@@ -272,21 +287,26 @@ int analyse_uspi_receive_frame(u8 Buffer[USPI_FRAME_BUFFER_SIZE], unsigned nFram
 	if(nFrameLength < ETHERNET_MAX_SIZE){
 	    EthernetHeader *header = (EthernetHeader *) Buffer;
 		//memcpy(header, Buffer, sizeof * header);
+		u8 mac[MAC_ADDRESS_SIZE];
+		u8 ip[IP_ADDRESS_SIZE];
 		if(header->nProtocolType == switch_msb_lsb(0x806) && nFrameLength >= sizeof(TARPFrame)){
 			TARPFrame *frame = (TARPFrame *) Buffer;
-			u8 mac[MAC_ADDRESS_SIZE];
-			u8 ip[IP_ADDRESS_SIZE];
 			u16 operation = 0;
 		    analyse_arp(frame, mac, ip, &operation);
+		    set_mac_address_of(ip, mac);
 		    if(operation == switch_msb_lsb(ARP_REQUEST)){
 		        send_debug_message("received arp request", 24);
-
 		        replay_arp(frame);
 		    }else if(operation == switch_msb_lsb(ARP_REPLY)){
 		        send_debug_message("received arp replay", 22);
 		    }
-		}else if(header->nProtocolType == switch_msb_lsb(0x800) && nFrameLength < sizeof(UDPFrame)){
+		}else if(header->nProtocolType == switch_msb_lsb(0x800) && nFrameLength <= sizeof(UDPFrame)){
+		    UDPFrame *frame = (UDPFrame *) Buffer;
             send_debug_message("received udp", 14);
+
+            analyse_ipv4(frame, mac, ip);
+            set_mac_address_of(ip, mac);
+
 
 		}else{
 		    return -1;
@@ -363,8 +383,10 @@ void send_udp_to(u8 ip[IP_ADDRESS_SIZE],char *data, int data_size, int port){
 	u8 MAC_BROADCAST[] 	= {255, 255, 255, 255, 255, 255};
 	u8 MAC_Laptop[]		= {184, 136, 227, 51, 106, 91};
 	u8 MAC_Router[]		= {56, 16, 213, 19, 202, 42};
+	u8 mac[MAC_ADDRESS_SIZE];
+	get_mac_address_of(ip, mac); //could also be broadcast
 
-	set_ethernet_header(&pack->Ethernet, MAC_BROADCAST);
+	set_ethernet_header(&pack->Ethernet, mac);
 	set_ip_header(&pack->IPV4, ip, udp_size);
 
 	package_size += sizeof (pack->Ethernet) + sizeof (pack->IPV4);
@@ -386,7 +408,17 @@ void send_udp_to(u8 ip[IP_ADDRESS_SIZE],char *data, int data_size, int port){
 		return;
 	}
 }
-
+int receiveEthernetFrame(){
+    u8 Buffer[USPI_FRAME_BUFFER_SIZE];
+    unsigned nFrameLength;
+	if (USPiReceiveFrame (Buffer, &nFrameLength))
+	{
+	    analyse_uspi_receive_frame(Buffer, nFrameLength);
+	    return 0;
+	}else{
+	    return -1;
+	}
+}
 
 int main (void)
 {
@@ -447,13 +479,8 @@ int main (void)
 	u32 i = 0;	
 	while (1)
 	{
-
-        u8 Buffer[USPI_FRAME_BUFFER_SIZE];
-		unsigned nFrameLength;
-	    if (USPiReceiveFrame (Buffer, &nFrameLength))
-		{
-			analyse_uspi_receive_frame(Buffer, nFrameLength);
-		}
+        //locksup if there is new frame
+        receiveEthernetFrame();
 
 		if(pause_loop < pause){
 	        pause_loop++;
