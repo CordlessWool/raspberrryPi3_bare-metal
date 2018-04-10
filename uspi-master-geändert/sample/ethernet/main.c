@@ -126,6 +126,43 @@ static const u8 OwnIPAddress[] = OWN_IP_ADDRESS;
 
 static const char FromSample[] = "sample";
 
+u16 addU16(u16 *check, u16 anzByte, u16 data)
+{
+    	u16 i = 0;
+    	u32 sum = 0x0000ffff&data;
+
+    	for(i=0;i<anzByte/2;i++)
+    	{
+       		sum = sum+check[i];
+    	}
+	if(anzByte%2) // ungerade Anzahl an Bytes -> letztes Bytepaar mit 0x00 auffüllen
+	{
+		sum = sum + (check[i]&0xff00);
+	}
+	sum = (sum&0xffff) +(sum>>16);
+	return (sum & 0xffff);
+}
+void checksumIPV4(IPV4Header *IPV4)
+{
+	//checksum for IPV4-Header
+	IPV4->HeaderChecksum = addU16((u16 *)IPV4, 20, 0)^0xffff;	//10*16Bit Header
+}
+void checksumUDP(UDPFrame * UDP, int anzDataByte)
+{
+	u16 tmp = 0;
+	u16 udp_prot = 0x1100;
+	// pseudo Header
+	tmp = addU16(&UDP->IPV4.IPSender,8,tmp); // IP-Adressen
+	tmp = addU16(&udp_prot,1,tmp);
+	tmp = addU16(&UDP->UDP.Length,1,tmp);
+	//add Header
+	tmp = addU16(&UDP->UDP,8,tmp);
+	//add Data
+	tmp = addU16(&UDP->data,anzDataByte,tmp);
+	//komplement
+	UDP->UDP.Checksum = tmp^0xffff;
+
+}
 
 void send_debug_message(char * message, int size){
     u8 test_ip[] = {192,168,178,60};
@@ -310,6 +347,7 @@ void set_ip_header(IPV4Header *IPV4, u8 ip[IP_ADDRESS_SIZE], int size){
 	IPV4->HeaderChecksum	= 0x0;
 	memcpy (IPV4->IPSender, OwnIPAddress, IP_ADDRESS_SIZE);
 	memcpy (IPV4->IPReceiver, ip, IP_ADDRESS_SIZE);
+	checksumIPV4(IPV4);
 }
 
 
@@ -323,6 +361,8 @@ void send_udp_to(u8 ip[IP_ADDRESS_SIZE],char *data, int data_size, int port){
 	UDPFrame *pack = (UDPFrame *) Buffer;
 
 	u8 MAC_BROADCAST[] 	= {255, 255, 255, 255, 255, 255};
+	u8 MAC_Laptop[]		= {184, 136, 227, 51, 106, 91};
+	u8 MAC_Router[]		= {56, 16, 213, 19, 202, 42};
 
 	set_ethernet_header(&pack->Ethernet, MAC_BROADCAST);
 	set_ip_header(&pack->IPV4, ip, udp_size);
@@ -336,6 +376,8 @@ void send_udp_to(u8 ip[IP_ADDRESS_SIZE],char *data, int data_size, int port){
 
 	memcpy (pack->data, data, data_size);
 
+	checksumUDP(pack, data_size);
+	//pack->UDP.Checksum	=  checksum((u16 *) &pack->UDP, 4+data_size/2);
 
 	if (!USPiSendFrame (pack, package_size))
 	{
@@ -348,8 +390,6 @@ void send_udp_to(u8 ip[IP_ADDRESS_SIZE],char *data, int data_size, int port){
 
 int main (void)
 {
-
-
 	if (!USPiEnvInitialize ())
 	{
 		return EXIT_HALT;
@@ -376,7 +416,8 @@ int main (void)
 	u8 IP_BROADCAST[] 	= {192, 168, 178, 255};
 	u8 RECIVER_IP_ADDRESS_PC[] = {192, 168, 178, 60};
 	u8 RECIVER_IP_ADDRESS_ROUTER[] = {192, 168, 178, 1};
-	//u8 IP_NTP[] 		= {192, 168, 178, 1}; //Router
+	u8 IP_Router[] 		= {192, 168, 178, 1}; //Router
+	u8 MAC_Router[]		= {56, 16, 213, 19, 202, 42};
 	u8 IP_Laptop[] 		= {192, 168, 178, 60}; // Laptop
 	u8 MAC_Laptop[]		= {184, 136, 227, 51, 106, 91};
 	u8 IP_NTP[] 		= {195,201,19,162};
@@ -394,9 +435,13 @@ int main (void)
 	SNTPFrame *pSNTPFrameReceive = (SNTPFrame *) BufferReceive;
 	unsigned nFrameLength;	
 
+	u8 BufferSNTP[USPI_FRAME_BUFFER_SIZE];
+	SNTPHeader *SNTP = (SNTPHeader *) BufferSNTP;
+
 	u8 OwnMACAddress[MAC_ADDRESS_SIZE];
 	USPiGetMACAddress (OwnMACAddress);
-	
+	char * message;
+
 	u32 pause = 200000000;
 	u32 pause_loop = 0;
 	u32 i = 0;	
@@ -417,78 +462,34 @@ int main (void)
 	        pause_loop = 0;
 	    }
 
-		/*
-		
-		//Request zusammenstellen
-		//Ethernet-Header
-		memcpy (pSNTPFrame->Ethernet.MACReceiver, MAC_Laptop, MAC_ADDRESS_SIZE);
-		memcpy (pSNTPFrame->Ethernet.MACSender, OwnMACAddress, MAC_ADDRESS_SIZE);
-		pSNTPFrame->Ethernet.nProtocolType = EthernetProtocol;
-		//IPV4-Header
-		pSNTPFrame->IPV4.VersIHL 	= 0x45; //Vers=4, IHL = 5x32Bit
-		pSNTPFrame->IPV4.TOS 		= 0xB8;//0x0;
-		pSNTPFrame->IPV4.Length		= 0x4C00; //20Header+56Data
-		pSNTPFrame->IPV4.ID		= 0x01;
-		pSNTPFrame->IPV4.FlagFragmentOffset = 0x0040; //Keine Fragmente
-		pSNTPFrame->IPV4.TTL		= 0x40; 
-		pSNTPFrame->IPV4.Protocol	= 0x11; //17->UDP-Code
-		pSNTPFrame->IPV4.HeaderChecksum	= 0x0;
-		memcpy (pSNTPFrame->IPV4.IPSender, OwnIPAddress, IP_ADDRESS_SIZE);
-		memcpy (pSNTPFrame->IPV4.IPReceiver, IP_Laptop, IP_ADDRESS_SIZE);
-		//UDP		
-		pSNTPFrame->UDP.PortSender 	= 0x7B00; //Port 123 für NTP
-		pSNTPFrame->UDP.PortReceiver	= 0x7B00;
-		pSNTPFrame->UDP.Length		= 0x3800;	//56Byte
-		pSNTPFrame->UDP.Checksum	= 0x0;
 		// SNTP
-		pSNTPFrame->SNTP.li_vn_mode	= 0x23;
-		pSNTPFrame->SNTP.stratum	= 0x03;
-		pSNTPFrame->SNTP.poll		= 0x06;
-  		pSNTPFrame->SNTP.precision	= 0x0;
-  	 	pSNTPFrame->SNTP.rootDelay	= 0x470C0000;
-  	 	pSNTPFrame->SNTP.rootDispersion = 0x8E020000;
-  	 	pSNTPFrame->SNTP.refId		= 0x0;
-  	 	pSNTPFrame->SNTP.refTm_s	= 0x0;
-  	 	pSNTPFrame->SNTP.refTm_f	= 0x0;
-  	 	pSNTPFrame->SNTP.origTm_s	= 0x0;
-  	 	pSNTPFrame->SNTP.origTm_f	= 0x0;
-  	 	pSNTPFrame->SNTP.rxTm_s		= 0x0;
-  	 	pSNTPFrame->SNTP.rxTm_f		= 0x0;
-  	 	pSNTPFrame->SNTP.txTm_s		= 0x0;
-  	 	pSNTPFrame->SNTP.txTm_f		= 0x0;
+		SNTP->li_vn_mode	= 0xE3;
+		SNTP->stratum	= 0x0;
+		SNTP->poll		= 0x06;
+  		SNTP->precision	= 0xE9;
+  	 	SNTP->rootDelay	= 0x0;
+  	 	SNTP->rootDispersion = 0x0;
+  	 	SNTP->refId		= 0x0;
+  	 	SNTP->refTm_s	= 0x0;
+  	 	SNTP->refTm_f	= 0x0;
+  	 	SNTP->origTm_s	= 0x0;
+  	 	SNTP->origTm_f	= 0x0;
+  	 	SNTP->rxTm_s		= 0x0;
+  	 	SNTP->rxTm_f		= 0x0;
+  	 	SNTP->txTm_s		= 0x0;
+  	 	SNTP->txTm_f		= 0x0;
+
+		//SNTP Request senden
+		send_udp_to(IP_Router, SNTP, sizeof * SNTP, 123);
+		message = "Request gesendet";
+		send_udp_to(IP_Laptop, message, 16, 3030);
 
 
-		// Request SENDEN
-		if (!USPiSendFrame (pSNTPFrame, sizeof *pSNTPFrame))
-		{
-			LogWrite (FromSample, LOG_ERROR, "USPiSendFrame failed");
-
-			break;
-		}
-
-		LogWrite (FromSample, LOG_NOTICE, "ARP reply successfully sent");
-
-        */
-
-		char * message_p = "Hello Philipp";
         gratuitous_arp();
-        send_udp_to(RECIVER_IP_ADDRESS_PC, message_p, 15, 3030);
 		send_arp_to(RECIVER_IP_ADDRESS_ROUTER);
 		send_arp_to(RECIVER_IP_ADDRESS_PC);
 
 
-		//Receive Answer
-		if (!USPiReceiveFrame (Buffer, &nFrameLength))
-		{
-			//continue;
-		}
-		memcpy (pSNTPFrame->Ethernet.MACReceiver, MAC_BROADCAST, MAC_ADDRESS_SIZE);
-		memcpy (pSNTPFrame->IPV4.IPReceiver, IP_Laptop, IP_ADDRESS_SIZE);
-		
-		
-		if (!USPiSendFrame (pSNTPFrame, sizeof *pSNTPFrame)) {
-			LogWrite(FromSample, LOG_ERROR, "USPiSendFrame failed");
-    	}
 	}
 
 	USPiEnvClose ();
