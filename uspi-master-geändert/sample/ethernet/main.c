@@ -127,6 +127,12 @@ static const u8 OwnIPAddress[] = OWN_IP_ADDRESS;
 static const char FromSample[] = "sample";
 
 
+void send_debug_message(char * message, int size){
+    u8 test_ip[] = {192,168,178,60};
+
+    send_udp_to(test_ip, message, size, 3031);
+}
+
 int switch_msb_lsb(int number){
 	int switched = (number%(16*16)*(16*16))+ (number /(16*16));
 
@@ -224,7 +230,7 @@ void analyse_ipv4(UDPFrame * frame, u8 * mac, u8 * ip ){
 }
 
 int analyse_uspi_receive_frame(u8 Buffer[USPI_FRAME_BUFFER_SIZE], unsigned nFrameLength){
-    u8 test_ip[] = {192,168,178,60};
+
 
 	if(nFrameLength < ETHERNET_MAX_SIZE){
 	    EthernetHeader *header = (EthernetHeader *) Buffer;
@@ -236,10 +242,11 @@ int analyse_uspi_receive_frame(u8 Buffer[USPI_FRAME_BUFFER_SIZE], unsigned nFram
 			u16 operation = 0;
 		    analyse_arp(frame, mac, ip, &operation);
 		    if(operation == switch_msb_lsb(ARP_REQUEST)){
-		        send_udp_to(test_ip, "received arp request", 24, 3030);
+		        send_debug_message("received arp request", 24);
+
 		        replay_arp(frame);
 		    }else if(operation == switch_msb_lsb(ARP_REPLY)){
-		        send_udp_to(test_ip, "received arp replay", 22, 3030);
+		        send_debug_message("received arp replay", 22);
 		    }
 		}else if(header->nProtocolType == switch_msb_lsb(0x800) && nFrameLength < sizeof(UDPFrame)){
             send_udp_to(test_ip, "received udp", 15, 3030);
