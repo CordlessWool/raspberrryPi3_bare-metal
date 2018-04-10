@@ -152,7 +152,7 @@ void checksumUDP(UDPFrame * UDP, int anzDataByte)
 	u16 tmp = 0;
 	u16 udp_prot = 0x1100;
 	// pseudo Header
-	tmp = addU16(&UDP->IPV4.IPSender,8,tmp); // IP-Adressen
+	tmp = addU16((u16 *) &UDP->IPV4.IPSender,8,tmp); // IP-Adressen
 	tmp = addU16(&udp_prot,1,tmp);
 	tmp = addU16(&UDP->UDP.Length,1,tmp);
 	//add Header
@@ -167,7 +167,7 @@ void checksumUDP(UDPFrame * UDP, int anzDataByte)
 void send_debug_message(char * message, int size){
     u8 test_ip[] = {192,168,178,60};
 
-    //send_udp_to(test_ip, message, size, 3031);
+    send_udp_to(test_ip, message, size, 3031);
 }
 
 int switch_msb_lsb(int number){
@@ -286,7 +286,7 @@ int analyse_uspi_receive_frame(u8 Buffer[USPI_FRAME_BUFFER_SIZE], unsigned nFram
 		        send_debug_message("received arp replay", 22);
 		    }
 		}else if(header->nProtocolType == switch_msb_lsb(0x800) && nFrameLength < sizeof(UDPFrame)){
-            send_udp_to(test_ip, "received udp", 15, 3030);
+            send_debug_message("received udp", 14);
 
 		}else{
 		    return -1;
@@ -442,7 +442,7 @@ int main (void)
 	USPiGetMACAddress (OwnMACAddress);
 	char * message;
 
-	u32 pause = 200000000;
+	u32 pause = 200000;
 	u32 pause_loop = 0;
 	u32 i = 0;	
 	while (1)
