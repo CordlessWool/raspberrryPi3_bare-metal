@@ -191,19 +191,28 @@ int main (void)
 	}
 	u8 MAC_BROADCAST[] 	= {255, 255, 255, 255, 255, 255};
 	u8 IP_BROADCAST[] 	= {192, 168, 178, 255};
-	u8 IP_NTP[] 		= {192, 168, 178, 1};
-	u8 RECIVER_IP_ADDRESS_PHILIPP[]  = {192, 168, 178, 60};
-	u8 RECIVER_IP_ADDRESS_WOLLE[]  = {192, 168, 178, 36};
-	u16 EthernetProtocol = 0x0008;
+	//u8 IP_NTP[] 		= {192, 168, 178, 1}; //Router
+	u8 IP_Laptop[] 		= {192, 168, 178, 60}; // Laptop
+	u8 MAC_Laptop[]		= {184, 136, 227, 51, 106, 91};
+	u8 IP_NTP[] 		= {195,201,19,162};
+	u8 MAC_NTP[]		= {56,16, 213, 19, 202,42};
+	u16 EthernetProtocol = 0x0008;	
 	//u8 OWN_IP_ADDRESS = {192, 168, 178, 251};	
 
 	u8 Buffer[USPI_FRAME_BUFFER_SIZE];
 	SNTPFrame *pSNTPFrame = (SNTPFrame *) Buffer;
+	
+	u8 BufferLog[USPI_FRAME_BUFFER_SIZE];
+	SNTPFrame *pSNTPFrameLog = (SNTPFrame *) BufferLog;	
+
+	u8 BufferReceive[USPI_FRAME_BUFFER_SIZE];
+	SNTPFrame *pSNTPFrameReceive = (SNTPFrame *) BufferReceive;
+	unsigned nFrameLength;	
 
 	u8 OwnMACAddress[MAC_ADDRESS_SIZE];
 	USPiGetMACAddress (OwnMACAddress);
 	
-	u32 pause = 2000000000;
+	u32 pause = 200000000;
 	u32 i = 0;	
 	while (1)
 	{
@@ -214,32 +223,32 @@ int main (void)
 		
 		//Request zusammenstellen
 		//Ethernet-Header
-		memcpy (pSNTPFrame->Ethernet.MACReceiver, MAC_BROADCAST, MAC_ADDRESS_SIZE);
+		memcpy (pSNTPFrame->Ethernet.MACReceiver, MAC_Laptop, MAC_ADDRESS_SIZE);
 		memcpy (pSNTPFrame->Ethernet.MACSender, OwnMACAddress, MAC_ADDRESS_SIZE);
 		pSNTPFrame->Ethernet.nProtocolType = EthernetProtocol;
 		//IPV4-Header
 		pSNTPFrame->IPV4.VersIHL 	= 0x45; //Vers=4, IHL = 5x32Bit
-		pSNTPFrame->IPV4.TOS 		= 0x0;
+		pSNTPFrame->IPV4.TOS 		= 0xB8;//0x0;
 		pSNTPFrame->IPV4.Length		= 0x4C00; //20Header+56Data
 		pSNTPFrame->IPV4.ID		= 0x01;
 		pSNTPFrame->IPV4.FlagFragmentOffset = 0x0040; //Keine Fragmente
-		pSNTPFrame->IPV4.TTL		= 0x20;
+		pSNTPFrame->IPV4.TTL		= 0x40; 
 		pSNTPFrame->IPV4.Protocol	= 0x11; //17->UDP-Code
 		pSNTPFrame->IPV4.HeaderChecksum	= 0x0;
 		memcpy (pSNTPFrame->IPV4.IPSender, OwnIPAddress, IP_ADDRESS_SIZE);
-		memcpy (pSNTPFrame->IPV4.IPReceiver, IP_NTP, IP_ADDRESS_SIZE);
+		memcpy (pSNTPFrame->IPV4.IPReceiver, IP_Laptop, IP_ADDRESS_SIZE);
 		//UDP		
 		pSNTPFrame->UDP.PortSender 	= 0x7B00; //Port 123 für NTP
 		pSNTPFrame->UDP.PortReceiver	= 0x7B00;
 		pSNTPFrame->UDP.Length		= 0x3800;	//56Byte
 		pSNTPFrame->UDP.Checksum	= 0x0;
 		// SNTP
-		pSNTPFrame->SNTP.li_vn_mode	= 0x1B;
-		pSNTPFrame->SNTP.stratum	= 0x0;
-		pSNTPFrame->SNTP.poll		= 0x0;
+		pSNTPFrame->SNTP.li_vn_mode	= 0x23;
+		pSNTPFrame->SNTP.stratum	= 0x03;
+		pSNTPFrame->SNTP.poll		= 0x06;
   		pSNTPFrame->SNTP.precision	= 0x0;
-  	 	pSNTPFrame->SNTP.rootDelay	= 0x0;
-  	 	pSNTPFrame->SNTP.rootDispersion = 0x0;
+  	 	pSNTPFrame->SNTP.rootDelay	= 0x470C0000;
+  	 	pSNTPFrame->SNTP.rootDispersion = 0x8E020000;
   	 	pSNTPFrame->SNTP.refId		= 0x0;
   	 	pSNTPFrame->SNTP.refTm_s	= 0x0;
   	 	pSNTPFrame->SNTP.refTm_f	= 0x0;
@@ -250,8 +259,7 @@ int main (void)
   	 	pSNTPFrame->SNTP.txTm_s		= 0x0;
   	 	pSNTPFrame->SNTP.txTm_f		= 0x0;
 
-		// Request
-		
+		// Request SENDEN
 		if (!USPiSendFrame (pSNTPFrame, sizeof *pSNTPFrame))
 		{
 			LogWrite (FromSample, LOG_ERROR, "USPiSendFrame failed");
@@ -271,10 +279,20 @@ int main (void)
 
 		for(i=0; i<pause;i++)
 		{
-			1+1;
+			memcpy (pSNTPFrame->Ethernet.MACReceiver, MAC_BROADCAST, MAC_ADDRESS_SIZE);
 		}
-
-
+		//Receive Answer
+		if (!USPiReceiveFrame (Buffer, &nFrameLength))
+		{
+			//continue;
+		}
+		memcpy (pSNTPFrame->Ethernet.MACReceiver, MAC_BROADCAST, MAC_ADDRESS_SIZE);
+		memcpy (pSNTPFrame->IPV4.IPReceiver, IP_Laptop, IP_ADDRESS_SIZE);
+		
+		
+		if (!USPiSendFrame (pSNTPFrame, sizeof *pSNTPFrame))
+		{
+			LogWrite (FromSample, LOG_ERROR, "USPiSendFrame failed");
 
 	}
 
