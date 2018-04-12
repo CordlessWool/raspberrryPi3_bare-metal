@@ -1,4 +1,4 @@
-#Ethernet Raspberry Pi 3 bare metal project
+# Ethernet Raspberry Pi 3 bare metal project
 
 >This is an small Raspberry Pi Project, based on [USPI](https://github.com/rsta2/uspi).
 
